@@ -8,3 +8,5 @@ Community projects by [@d4rken](https://github.com/d4rken).
 Some projects are also on [Google Play](https://play.google.com/store/apps/developer?id=darken).
 
 Join us on [Discord](https://discord.gg/ENtVkMHqZg).
+
+[Sponsor my work](https://github.com/sponsors/d4rken/dashboard) if you like it ❤️.
