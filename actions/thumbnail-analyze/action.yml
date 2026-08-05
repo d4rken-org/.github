@@ -1,0 +1,37 @@
+name: 'Thumbnail analyze'
+description: 'Rewrite oversized GitHub-hosted screenshots in Markdown into clickable thumbnails. Emits data only; performs no API calls.'
+author: 'd4rken-org'
+
+inputs:
+  target-height:
+    description: 'Rendered height to aim for, in pixels. The emitted width is derived from it so aspect ratio is preserved.'
+    required: false
+    default: '400'
+  min-height:
+    description: 'Only portrait images taller than this are touched. Landscape shots are already constrained by the comment column width.'
+    required: false
+    default: '640'
+  max-images:
+    description: 'Cap on distinct image URLs probed per body. Bounds outbound requests; repeats of one URL are free.'
+    required: false
+    default: '20'
+  opt-out-marker:
+    description: 'A body containing this string is skipped entirely.'
+    required: false
+    default: '<!-- no-thumbnail -->'
+
+outputs:
+  changed:
+    description: 'true when the body needs rewriting. When false, every other output is absent.'
+  body-gz-b64:
+    description: 'The rewritten body, gzipped then base64-encoded. Gzip keeps it under the per-environment-variable size limit for non-Latin scripts; base64 means no character can terminate a string literal in the consuming step.'
+  original-sha:
+    description: 'SHA-256 of the body that was analysed. The consuming job should re-read the body and refuse to write when this no longer matches, otherwise a slow run reverts an edit the author made while it was working.'
+
+runs:
+  using: 'node24'
+  main: 'dist/index.js'
+
+branding:
+  icon: 'image'
+  color: 'blue'

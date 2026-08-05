@@ -1,0 +1,19 @@
+{
+  "name": "thumbnail-analyze",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Rewrites oversized GitHub-hosted screenshots in issue and comment Markdown into clickable thumbnails.",
+  "license": "Apache-2.0",
+  "main": "dist/index.js",
+  "scripts": {
+    "test": "node --test src/rewrite.test.js",
+    "build": "ncc build src/index.js -o dist --minify",
+    "verify": "npm run build && git diff --exit-code -- dist"
+  },
+  "dependencies": {
+    "probe-image-size": "7.3.0"
+  },
+  "devDependencies": {
+    "@vercel/ncc": "0.38.4"
+  }
+}
