@@ -1,0 +1,123 @@
+name: Thumbnail images
+
+# Shared workflow that shrinks oversized screenshots in issues and comments
+# into clickable thumbnails. Call it from a repo with a small stub:
+#
+#   name: Thumbnail images
+#   on:
+#     issue_comment: { types: [created, edited] }
+#     issues:        { types: [opened, edited] }
+#   permissions: {}
+#   jobs:
+#     thumbnail:
+#       permissions:
+#         issues: write
+#       uses: d4rken-org/.github/.github/workflows/thumbnail-images.yml@<sha>
+#
+# workflow_call cannot itself be triggered by issue_comment, which is why the
+# stub carries the real triggers.
+#
+# The split below is the point of the whole design. `analyze` handles
+# attacker-controlled Markdown and fetches attacker-supplied URLs while holding
+# no token scopes whatsoever. `apply` holds the write scope but parses nothing,
+# fetches nothing, and targets an ID it reads from the event rather than one
+# handed to it by `analyze`. A compromise of the parsing half therefore buys
+# access to an ephemeral runner and nothing else.
+
+on:
+  workflow_call:
+    inputs:
+      target-height:
+        description: 'Rendered height to aim for, in pixels.'
+        required: false
+        type: string
+        default: '400'
+      min-height:
+        description: 'Only portrait images taller than this are touched.'
+        required: false
+        type: string
+        default: '640'
+      max-images:
+        description: 'Cap on distinct image URLs probed per body.'
+        required: false
+        type: string
+        default: '20'
+      opt-out-marker:
+        description: 'A body containing this string is skipped entirely.'
+        required: false
+        type: string
+        default: '<!-- no-thumbnail -->'
+      runs-on:
+        description: 'Runner label for both jobs.'
+        required: false
+        type: string
+        default: 'ubuntu-22.04'
+
+jobs:
+  analyze:
+    # Untrusted half. Skipping bot-authored bodies also stops this reacting to
+    # its own output, though GITHUB_TOKEN edits do not retrigger workflows.
+    if: github.event.sender.type != 'Bot'
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      changed: ${{ steps.rewrite.outputs.changed }}
+      body-gz-b64: ${{ steps.rewrite.outputs.body-gz-b64 }}
+      original-sha: ${{ steps.rewrite.outputs.original-sha }}
+    steps:
+      - name: Rewrite images
+        id: rewrite
+        uses: d4rken-org/.github/actions/thumbnail-analyze@7a2b199aaad47c7b43882af5bf7bfd097e91611e
+        with:
+          target-height: ${{ inputs.target-height }}
+          min-height: ${{ inputs.min-height }}
+          max-images: ${{ inputs.max-images }}
+          opt-out-marker: ${{ inputs.opt-out-marker }}
+
+  apply:
+    needs: analyze
+    if: needs.analyze.outputs.changed == 'true'
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Update body
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          # Reaches the script as a runtime value, never as substituted source.
+          # Base64 means no character in it can terminate a string literal, and
+          # gzip keeps it under the per-variable size limit for bodies written
+          # in scripts like Chinese or Japanese.
+          BODY_GZ_B64: ${{ needs.analyze.outputs.body-gz-b64 }}
+          ORIGINAL_SHA: ${{ needs.analyze.outputs.original-sha }}
+        with:
+          script: |
+            const crypto = require('crypto')
+            const zlib = require('zlib')
+
+            const isComment = context.eventName === 'issue_comment'
+            const target = isComment
+              ? { comment_id: context.payload.comment.id }
+              : { issue_number: context.payload.issue.number }
+
+            // Compare-and-swap. The body was snapshotted when the webhook
+            // fired; if the author has edited it since, writing our rewrite
+            // would silently revert their edit. Re-read and bail on mismatch.
+            const current = isComment
+              ? (await github.rest.issues.getComment({ ...context.repo, ...target })).data.body
+              : (await github.rest.issues.get({ ...context.repo, ...target })).data.body
+            const currentSha = crypto.createHash('sha256').update(String(current ?? ''), 'utf8').digest('hex')
+
+            if (currentSha !== process.env.ORIGINAL_SHA) {
+              core.info('Body changed since it was analysed; skipping rather than reverting the newer edit.')
+              return
+            }
+
+            const body = zlib.gunzipSync(Buffer.from(process.env.BODY_GZ_B64, 'base64')).toString('utf8')
+            if (isComment) {
+              await github.rest.issues.updateComment({ ...context.repo, ...target, body })
+            } else {
+              await github.rest.issues.update({ ...context.repo, ...target, body })
+            }

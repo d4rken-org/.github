@@ -1,0 +1,48 @@
+name: Thumbnail action tests
+
+# The action ships a committed bundle, so an edit to src/ that is not rebuilt
+# would leave every consuming repo running stale code with no visible symptom.
+# The bundle check below is the guard against that.
+
+on:
+  push:
+    paths:
+      - 'actions/thumbnail-analyze/**'
+      - '.github/workflows/thumbnail-images.yml'
+      - '.github/workflows/thumbnail-action-tests.yml'
+  pull_request:
+    paths:
+      - 'actions/thumbnail-analyze/**'
+      - '.github/workflows/thumbnail-images.yml'
+      - '.github/workflows/thumbnail-action-tests.yml'
+
+permissions: {}
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: actions/thumbnail-analyze
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Run tests
+        run: npm test
+
+      - name: Check the committed bundle matches src
+        run: |
+          npm run build
+          if ! git diff --exit-code -- dist; then
+            echo "::error::dist/ is out of date. Run 'npm run build' in actions/thumbnail-analyze and commit the result."
+            exit 1
+          fi
