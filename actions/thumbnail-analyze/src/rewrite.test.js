@@ -377,6 +377,82 @@ test('rewrite leaves a tag inside a multi-line anchor alone', async () => {
   assert.deepStrictEqual(await rewrite(body, noProbe), { changed: false, body })
 })
 
+test('rewrite leaves a tag linked to a relative or fragment target alone', async () => {
+  // A link target needs no scheme. Missing one of these would nest an anchor
+  // inside the author's own link.
+  for (const target of ['#details', '/owner/repo/issues/1']) {
+    const body = `[${uploaded(ATTACHMENT, 3000, 4000)}](${target})`
+    assert.deepStrictEqual(await rewrite(body, noProbe), { changed: false, body }, target)
+  }
+})
+
+test('rewrite leaves a tag inside an anchor opened at end of line alone', async () => {
+  // A valid opener: the attributes continue on the next line.
+  const body = [
+    '<a',
+    ' href="https://example.com/details">',
+    uploaded(ATTACHMENT, 3000, 4000),
+    '</a>',
+  ].join('\n')
+  assert.deepStrictEqual(await rewrite(body, noProbe), { changed: false, body })
+})
+
+test('an unclosed anchor inside a fence does not suppress later images', async () => {
+  const body = [
+    '```html',
+    '<a href="https://example.com/details">',
+    '```',
+    '',
+    uploaded(ATTACHMENT, 3000, 4000),
+  ].join('\n')
+  const result = await rewrite(body, noProbe)
+  assert.strictEqual(result.changed, true)
+  assert.ok(result.body.includes(`<a href="${ATTACHMENT}"><img `), result.body)
+  assert.ok(result.body.includes('```html'), 'the fenced sample must be untouched')
+})
+
+test('a comment opener inside a fence does not suppress later images', async () => {
+  const body = [
+    '```html',
+    '<!-- commented out',
+    '```',
+    '',
+    uploaded(ATTACHMENT, 3000, 4000),
+    '',
+    `![shot](${ATTACHMENT2})`,
+  ].join('\n')
+  const result = await rewrite(body, tallProbe)
+  assert.strictEqual(result.changed, true)
+  assert.ok(result.body.includes(`<a href="${ATTACHMENT}"><img `), result.body)
+  assert.ok(result.body.includes(`<a href="${ATTACHMENT2}"><img `), result.body)
+})
+
+test('a closing anchor inside inline code does not end the anchor', async () => {
+  const body = [
+    '<a href="https://example.com/details">',
+    'as in `</a>`, which is text',
+    uploaded(ATTACHMENT, 3000, 4000),
+    '</a>',
+  ].join('\n')
+  assert.deepStrictEqual(await rewrite(body, noProbe), { changed: false, body })
+})
+
+test('an anchor inside a comment does not count as an open link', async () => {
+  const body = ['<!-- <a href="/old"> -->', '', uploaded(ATTACHMENT, 3000, 4000)].join('\n')
+  const result = await rewrite(body, noProbe)
+  assert.strictEqual(result.changed, true)
+  assert.ok(result.body.includes(`<a href="${ATTACHMENT}"><img `), result.body)
+})
+
+test('a comment still closes on a line that looks like code', async () => {
+  // Markdown is not interpreted inside a comment, so the indented closer counts
+  // even though an opener on that line would have been ignored.
+  const body = ['<!--', '', '    -->', '', uploaded(ATTACHMENT, 3000, 4000)].join('\n')
+  const result = await rewrite(body, noProbe)
+  assert.strictEqual(result.changed, true)
+  assert.ok(result.body.includes(`<a href="${ATTACHMENT}"><img `), result.body)
+})
+
 test('the probe budget covers Markdown images only', async () => {
   const probed = []
   const counting = {

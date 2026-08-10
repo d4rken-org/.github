@@ -66,9 +66,15 @@ const IMG_ATTRS_REQUIRED = ['src', 'width', 'height']
 
 // Anchors and Markdown inline links wrapping an image. Both runs are bounded
 // for the same reason IMAGE_RE is.
-const ANCHOR_RE = /<a(?=[\t\f\r />])|<\/a\s*>/gi
+// The opener also ends at end of line: attributes may sit on the next line, and
+// missing that opener would wrap an image that is already inside a link. Each
+// line is matched separately, so "$" is that line's end.
+const ANCHOR_RE = /<a(?=$|[\t\f\r />])|<\/a\s*>/gi
+// The destination carries no scheme requirement: "#details" and "/owner/repo"
+// link just as well as an absolute URL, and a link that goes unrecognised here
+// gets an anchor nested inside the author's own.
 const LINKED_RE = new RegExp(
-  `\\[[^\\]]{0,${MAX_ALT}}\\]\\((https?://[^\\s()<>"'\`]{1,${MAX_URL}})\\)`,
+  `\\[[^\\]]{0,${MAX_ALT}}\\]\\(([^\\s()<>"'\`]{0,${MAX_URL}})\\)`,
   'g',
 )
 
@@ -278,11 +284,23 @@ function attrSize(attrs) {
  * the open state is carried forward the same way the fence state is in
  * codeLineIndices. Commented-out markup does not render and must not be
  * rewritten into something that does.
+ *
+ * The open state is cross-line, so an opener that never renders must not enter
+ * it: a "<!--" shown as a code sample would otherwise silently suppress every
+ * image below it for the rest of the body. Once a comment is genuinely open the
+ * masks stop applying — inside a comment nothing is Markdown any more, so a
+ * "-->" on an indented or fenced-looking line still closes it.
+ *
+ * @param {Set<number>} skipLines line indices sitting inside code blocks.
+ * @param {Array<Array<[number, number]>>} inlineRangesPerLine inline code spans.
  */
-function htmlCommentRanges(lines) {
+function htmlCommentRanges(lines, skipLines, inlineRangesPerLine) {
   const perLine = []
   let open = false
-  for (const line of lines) {
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]
+    const masked = skipLines.has(index)
+    const inlineRanges = inlineRangesPerLine[index]
     const ranges = []
     let i = 0
     while (i < line.length) {
@@ -299,6 +317,11 @@ function htmlCommentRanges(lines) {
       }
       const start = line.indexOf('<!--', i)
       if (start === -1) break
+      if (masked || inSpan(inlineRanges, start)) {
+        // "<!--" has no self-overlap, so the whole token can be stepped over.
+        i = start + 4
+        continue
+      }
       open = true
       i = start
     }
@@ -313,26 +336,42 @@ function htmlCommentRanges(lines) {
  * counts. A best-effort approximation rather than a parser: it answers only
  * "is this image already inside a link?", where a false positive costs a
  * missed thumbnail and a false negative would nest anchors.
+ *
+ * Tokens that do not render are ignored unconditionally, unlike the comment
+ * tracker above: an "</a>" in a code sample is literal text even while an
+ * anchor is open elsewhere, so acting on it would end the wrapper early and
+ * expose the image it covers. A depth carried in from an earlier line still
+ * covers these lines whole — the anchor around them is real either way.
+ *
+ * @param {Set<number>} skipLines line indices sitting inside code blocks.
+ * @param {Array<Array<[number, number]>>} commentSpans ranges from htmlCommentRanges.
+ * @param {Array<Array<[number, number]>>} inlineRangesPerLine inline code spans.
  */
-function anchorRanges(lines) {
+function anchorRanges(lines, skipLines, commentSpans, inlineRangesPerLine) {
   const perLine = []
   let depth = 0
-  for (const line of lines) {
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]
     const ranges = []
     let openedAt = depth > 0 ? 0 : -1
-    ANCHOR_RE.lastIndex = 0
-    let match
-    while ((match = ANCHOR_RE.exec(line)) !== null) {
-      if (match[0][1] === '/') {
-        if (depth === 0) continue
-        depth--
-        if (depth === 0 && openedAt !== -1) {
-          ranges.push([openedAt, match.index + match[0].length])
-          openedAt = -1
+    if (!skipLines.has(index)) {
+      const inlineRanges = inlineRangesPerLine[index]
+      const commentRanges = commentSpans[index]
+      ANCHOR_RE.lastIndex = 0
+      let match
+      while ((match = ANCHOR_RE.exec(line)) !== null) {
+        if (inSpan(inlineRanges, match.index) || inSpan(commentRanges, match.index)) continue
+        if (match[0][1] === '/') {
+          if (depth === 0) continue
+          depth--
+          if (depth === 0 && openedAt !== -1) {
+            ranges.push([openedAt, match.index + match[0].length])
+            openedAt = -1
+          }
+        } else {
+          if (depth === 0) openedAt = match.index
+          depth++
         }
-      } else {
-        if (depth === 0) openedAt = match.index
-        depth++
       }
     }
     if (depth > 0 && openedAt !== -1) ranges.push([openedAt, line.length])
@@ -522,13 +561,16 @@ async function rewrite(body, { probe: probeFn, ...overrides } = {}) {
 
   const lines = body.split('\n')
   const skipLines = codeLineIndices(lines)
-  const commentSpans = htmlCommentRanges(lines)
-  const anchorSpans = anchorRanges(lines)
+  // Computed up front rather than per hit line: the cross-line trackers need
+  // the same spans to tell a rendered token from one that is only shown.
+  const inlineRanges = lines.map((line) => inlineCodeRanges(line))
+  const commentSpans = htmlCommentRanges(lines, skipLines, inlineRanges)
+  const anchorSpans = anchorRanges(lines, skipLines, commentSpans, inlineRanges)
 
   const hits = []
   for (let i = 0; i < lines.length; i++) {
     if (skipLines.has(i)) continue
-    const codeRanges = inlineCodeRanges(lines[i])
+    const codeRanges = inlineRanges[i]
     const commentRanges = commentSpans[i]
 
     const tags = htmlImgTags(lines[i])
