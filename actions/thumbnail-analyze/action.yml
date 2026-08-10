@@ -1,5 +1,5 @@
 name: 'Thumbnail analyze'
-description: 'Rewrite oversized GitHub-hosted screenshots in Markdown into clickable thumbnails. Emits data only; performs no API calls.'
+description: 'Rewrite oversized GitHub-hosted screenshots into clickable thumbnails, both Markdown images and the HTML <img> tags GitHub uploads emit. Emits data only; performs no API calls.'
 author: 'd4rken-org'
 
 inputs:
@@ -12,7 +12,7 @@ inputs:
     required: false
     default: '640'
   max-images:
-    description: 'Cap on distinct image URLs probed per body. Bounds outbound requests; repeats of one URL are free.'
+    description: 'Cap on distinct image URLs probed per body. Bounds outbound requests; repeats of one URL are free. Only Markdown images are probed, because HTML <img> tags state their own dimensions and so neither make requests nor count against the cap.'
     required: false
     default: '20'
   opt-out-marker:
