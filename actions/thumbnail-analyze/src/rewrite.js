@@ -292,7 +292,8 @@ function attrSize(attrs) {
  * "-->" on an indented or fenced-looking line still closes it.
  *
  * @param {Set<number>} skipLines line indices sitting inside code blocks.
- * @param {Array<Array<[number, number]>>} inlineRangesPerLine inline code spans.
+ * @param {Array<Array<[number, number]>>} inlineRangesPerLine inline code spans,
+ *   each line's sorted by start.
  */
 function htmlCommentRanges(lines, skipLines, inlineRangesPerLine) {
   const perLine = []
@@ -302,6 +303,11 @@ function htmlCommentRanges(lines, skipLines, inlineRangesPerLine) {
     const masked = skipLines.has(index)
     const inlineRanges = inlineRangesPerLine[index]
     const ranges = []
+    // Candidates come out of indexOf in ascending order, so the inline spans are
+    // walked with a cursor rather than searched per candidate: a line built from
+    // "`<!--`" repeats would otherwise rescan the whole span array per token,
+    // which is quadratic in attacker-controlled text.
+    const shown = spanCursor(inlineRanges)
     let i = 0
     while (i < line.length) {
       if (open) {
@@ -317,7 +323,7 @@ function htmlCommentRanges(lines, skipLines, inlineRangesPerLine) {
       }
       const start = line.indexOf('<!--', i)
       if (start === -1) break
-      if (masked || inSpan(inlineRanges, start)) {
+      if (masked || shown(start)) {
         // "<!--" has no self-overlap, so the whole token can be stepped over.
         i = start + 4
         continue
@@ -345,7 +351,8 @@ function htmlCommentRanges(lines, skipLines, inlineRangesPerLine) {
  *
  * @param {Set<number>} skipLines line indices sitting inside code blocks.
  * @param {Array<Array<[number, number]>>} commentSpans ranges from htmlCommentRanges.
- * @param {Array<Array<[number, number]>>} inlineRangesPerLine inline code spans.
+ * @param {Array<Array<[number, number]>>} inlineRangesPerLine inline code spans,
+ *   each line's sorted by start.
  */
 function anchorRanges(lines, skipLines, commentSpans, inlineRangesPerLine) {
   const perLine = []
@@ -355,12 +362,19 @@ function anchorRanges(lines, skipLines, commentSpans, inlineRangesPerLine) {
     const ranges = []
     let openedAt = depth > 0 ? 0 : -1
     if (!skipLines.has(index)) {
-      const inlineRanges = inlineRangesPerLine[index]
-      const commentRanges = commentSpans[index]
+      // Matches arrive in ascending order, so both span lists get their own
+      // cursor instead of a scan per token; "`<a>`" repeats are otherwise
+      // quadratic. Comment ranges are emitted in ascending order already.
+      const codeCursor = spanCursor(inlineRangesPerLine[index])
+      const commentCursor = spanCursor(commentSpans[index])
       ANCHOR_RE.lastIndex = 0
       let match
       while ((match = ANCHOR_RE.exec(line)) !== null) {
-        if (inSpan(inlineRanges, match.index) || inSpan(commentRanges, match.index)) continue
+        // Both cursors have to see every candidate to stay in step, so the two
+        // tests are taken before they are combined rather than short-circuited.
+        const inCode = codeCursor(match.index)
+        const inComment = commentCursor(match.index)
+        if (inCode || inComment) continue
         if (match[0][1] === '/') {
           if (depth === 0) continue
           depth--
@@ -397,6 +411,30 @@ function markdownLinkRanges(line) {
 
 function inSpan(ranges, at) {
   return ranges.some(([from, to]) => at >= from && at < to)
+}
+
+/**
+ * inSpan for a caller that queries a start-sorted range list at ascending
+ * positions: each range is stepped over once across the whole token stream,
+ * where inSpan would rescan the list per token. That difference is the
+ * difference between linear and quadratic for the two cross-line trackers,
+ * whose candidates are 2-4 character tokens and so can be as numerous as the
+ * spans themselves.
+ *
+ * Ranges may nest or overlap, so only those ending at or before the query are
+ * stepped over; anything left behind ends earlier still and cannot cover a
+ * later query. Ranges ahead of the cursor start no earlier than the one it
+ * rests on, so once that one fails to cover the query nothing further along
+ * can either, and testing it alone is exact.
+ *
+ * @returns {(at: number) => boolean} must be called with non-decreasing values.
+ */
+function spanCursor(ranges) {
+  let cursor = 0
+  return (at) => {
+    while (cursor < ranges.length && ranges[cursor][1] <= at) cursor++
+    return cursor < ranges.length && at >= ranges[cursor][0]
+  }
 }
 
 /**
@@ -563,7 +601,10 @@ async function rewrite(body, { probe: probeFn, ...overrides } = {}) {
   const skipLines = codeLineIndices(lines)
   // Computed up front rather than per hit line: the cross-line trackers need
   // the same spans to tell a rendered token from one that is only shown.
-  const inlineRanges = lines.map((line) => inlineCodeRanges(line))
+  // inlineCodeRanges emits a span when its closer is found, which is not
+  // ascending by start — a short opener nested in a longer one closes first.
+  // Sorted once here because spanCursor's advance depends on that order.
+  const inlineRanges = lines.map((line) => inlineCodeRanges(line).sort((a, b) => a[0] - b[0]))
   const commentSpans = htmlCommentRanges(lines, skipLines, inlineRanges)
   const anchorSpans = anchorRanges(lines, skipLines, commentSpans, inlineRanges)
 

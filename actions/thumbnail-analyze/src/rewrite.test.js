@@ -494,6 +494,11 @@ test('rewrite stays fast on adversarial bodies', async () => {
     'deep indent': '    x\n'.repeat(10000),
     // None of these terminate, so the tag scanner must give up per candidate
     // rather than rescan the rest of the line each time.
+    // One line, one inline-code span and one anchor/comment token per sample:
+    // the cross-line trackers used to rescan that line's span list from the
+    // start per token, which is quadratic in the number of samples.
+    'inline code anchors': '`<a>` '.repeat(11000),
+    'inline code comment opens': '`<!--` '.repeat(9500),
     'many img opens': '<img '.repeat(13000),
     'one endless attribute': `<img alt="${'x'.repeat(60000)}" src="x" width="1" height="2">`,
     'unterminated quotes': '<img alt="> '.repeat(5000),
