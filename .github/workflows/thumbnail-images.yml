@@ -68,7 +68,7 @@ jobs:
     steps:
       - name: Rewrite images
         id: rewrite
-        uses: d4rken-org/.github/actions/thumbnail-analyze@7a2b199aaad47c7b43882af5bf7bfd097e91611e
+        uses: d4rken-org/.github/actions/thumbnail-analyze@78589e3c8eea7415816771b68965e07766b4c6fb
         with:
           target-height: ${{ inputs.target-height }}
           min-height: ${{ inputs.min-height }}
