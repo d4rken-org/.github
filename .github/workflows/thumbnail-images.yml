@@ -51,7 +51,7 @@ on:
         description: 'Runner label for both jobs.'
         required: false
         type: string
-        default: 'ubuntu-22.04'
+        default: 'ubuntu-24.04'
 
 jobs:
   analyze:
